@@ -1,25 +1,22 @@
 <template>
   <div class="home">
     <div class="record">
-      <input @click="startBtn" type="button" value="录音" />
-      <input @click="stopRecord" type="button" value="停止" />
-      <input @click="play" type="button" value="播放" />
-      <div class="record-play" v-show="isFinished">
-        <h2>Current voice player is:</h2>
-        <audio controls autoplay></audio>
-      </div>
+      <input @click="start" type="button" value="录音" />
+      <input @click="stop" type="button" value="停止" />
+    </div>
+    <div class="text-container">
+      <transition name="slide" mode="out-in">
+        <div :key="text.id">
+          <p>{{ text.key }}</p>
+          <p>{{ text.value }}</p>
+        </div>
+      </transition>
     </div>
   </div>
 </template>
 
 <script>
-
-import Record from "@/assets/js/record-sdk.js";
-
-const recorder = new Record({
-  sampleRate: 16000,
-
-});
+import { Recorder } from '@/assets/js/test.js'
 
 export default {
   name: "Home",
@@ -27,112 +24,161 @@ export default {
   },
   data () {
     return {
-      isFinished: false,
-      audio: "",
-      recorder: recorder,
+      number: 0,
+      ws: null, //实现WebSocket 
+      record: null, //多媒体对象，用来处理音频
+      arr: [{}],
       timer: null,
-      websock: null,
-
+    }
+  },
+  mounted () {
+  },
+  computed: {
+    text () {
+      if (this.arr.length !== this.number) {
+        return {
+          id: this.number,
+          key: this.arr[this.number].src,
+          value: this.arr[this.number].dst
+        }
+      } else {
+        return {}
+      }
     }
   },
   methods: {
-    startBtn () {//开始录音btn
-      this.isFinished = false;
-      this.initWebscoket();
+    start () {//开始
+      this.initAudio();
+      this.startMove();
 
     },
-    startRecord () {
-      this.recorder.startRecord({
-        success: res => {
-          console.log("开始录音成功.");
+    stop () {//结束
+      if (this.ws) {
+        this.ws.close();
+        this.record.stop();
+        console.log('关闭对讲以及WebSocket');
+      }
+    },
+    initRecord (rec) {//初始化录音
+      this.record = rec;
+    },
+    initAudio () {//判断浏览是否开启麦克风权限
+      const that = this;
+      navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia;
+      if (!navigator.getUserMedia) {
+        alert('浏览器不支持音频输入');
+      } else {
+        navigator.getUserMedia({
+          audio: true,
         },
-        error: err => {
-          console.log("开始录音失败.");
+          function (mediaStream) {
+            that.initRecord(new Recorder(mediaStream));
+            console.log('开始对讲');
+            that.useWebSocket();
+          },
+          function (error) {
+            console.log(error);
+            switch (error.message || error.name) {
+              case 'PERMISSION_DENIED':
+              case 'PermissionDeniedError':
+                console.info('用户拒绝提供信息。');
+                break;
+              case 'NOT_SUPPORTED_ERROR':
+              case 'NotSupportedError':
+                console.info('浏览器不支持硬件设备。');
+                break;
+              case 'MANDATORY_UNSATISFIED_ERROR':
+              case 'MandatoryUnsatisfiedError':
+                console.info('无法发现指定的硬件设备。');
+                break;
+              default:
+                console.info('无法打开麦克风。异常信息:' + (error.code || error.name));
+                break;
+            }
+          }
+        )
+      }
+
+    },
+    useWebSocket () {//使用webscoket
+      const that = this;
+      this.ws = new WebSocket("ws://182.140.140.36:8085/aWebsocket/transcribe");
+      this.ws.binaryType = 'arraybuffer'; //传输的是 ArrayBuffer 类型的数据
+      this.ws.onopen = function () {
+        console.log('握手成功');
+        if (that.ws.readyState === 1) { //ws进入连接状态，则每隔500毫秒发送一包数据
+          console.log('这里是连接状态');
+          that.record.start();
         }
-      });
+      };
+
+      this.ws.onmessage = function (e) {
+        let jsonData = JSON.parse(e.data)
+        that.arr.push({ ...jsonData })
+        console.log(that.arr, 'that.arr');
+
+
+
+      }
+
+      this.ws.onerror = function (err) {
+        console.info(err)
+      }
+
 
     },
-    getBlob () {
-      let blob
-      this.recorder.getBlob({
-        success: res => {
-          console.log(res, 'res文件');
-          blob = res;
-        },
-        error: err => {
-          console.log(err, 'err');
+    startMove () {
+      this.timer = setTimeout(() => {
+        if (this.number === this.arr.length - 1) {
+          this.number = 0;
+        } else {
+          this.number += 1;
         }
-      });
-
-      return blob
+      }, 1000); // 滚动不需要停顿则将2000改成动画持续时间
 
     },
-    stopRecord () {
-      this.isFinished = false;
-      this.recorder.stopRecord({
-        success: res => {
-          console.log("停止录音成功.");
-        },
-        error: err => {
-          console.log("停止录音失败.");
-        }
-      });
-      clearInterval(this.timer)
-
-    },
-    play () {
-      console.log("开始播放录音");
-      this.isFinished = true;
-      this.audio = document.querySelector("audio");
-      this.recorder.play(this.audio);
-    },
-    clear () {
-      this.recorder.clear({
-        success: res => {
-          console.log(res, '清除成功');
-        },
-        error: err => {
-          console.log(err, '清除失败');
-        }
-      });
-
-    },
-    initWebscoket () {
-      const ws = `ws://182.140.140.35:8085/Websocket/display`;
-      this.websock = new WebSocket(ws)
-      this.websock.binaryType = 'arraybuffer'; //传输的是 ArrayBuffer 类型的数据
-      this.websock.onopen = this.websocketonopen();
-      this.websock.onmessage = this.websocketonmessage;
-      this.websock.onerror = this.websocketonerror;
-      this.websock.onclose = this.websocketclose;
-    },
-    websocketonopen () {//连接建立之后执行send方法发送数据
-      this.timer = setInterval(() => {
-        if (this.websock.readyState === 1) {//ws进入连接状态，则每隔500毫秒发送一包数据
-          this.startRecord();
-          console.log("#######################send Blob start ##############################");
-          this.getBlob()
-          //   this.websock.send(this.getBlob());    //发送音频数据
-          console.log("#######################send Blob end ##############################");
-          this.clear();	//每次发送完成则清理掉旧数据
-        }
-      }, 4000);  //每隔4000ms发送一次，定时器
-
-    },
-    websocketonmessage (e) {//数据接收
-      console.log(e, 'event');
-
-    },
-    websocketonerror () {//连接建立失败重连
-      this.initWebSocket();
-    },
-    websocketclose (e) {  //断开连接
-      console.log('断开连接', e);
+    clearMove () {
+      clearTimeout(this.timer)
     },
 
+
+
+
+
+
+
+
+  },
+  watch: {
+    arr: {
+      handler (val) {
+        this.arr = val;
+        this.startMove();
+      },
+      deep: true
+    }
   }
 };
 </script>
 
 <style lang="scss" scoped>
+.text-container {
+  width: 100%;
+  height: 100px;
+  border: 1px solid #eee;
+  color: #000;
+  div {
+    margin-top: 30px;
+  }
+}
+.slide-enter-active,
+.slide-leave-active {
+  transition: all 0.5s linear;
+}
+.slide-leave-to {
+  transform: translateY(-20px);
+}
+.slide-enter {
+  transform: translateY(20px);
+}
 </style>
